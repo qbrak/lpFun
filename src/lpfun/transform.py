@@ -132,6 +132,7 @@ class Transform(AbstractTransform):
         colex_order: bool = True,
         threshold: int = 150_000_000,
         report: bool = True,
+        differentiation: bool = False,
     ):
         """
         Initialize the Transform object, which constructs and manages the polynomial transform
@@ -171,6 +172,10 @@ class Transform(AbstractTransform):
         report : bool, optional
             If True, print detailed initialization information and statistics after setup
             (default is True).
+        differentiation : bool, optional
+            If True, build differentiation matrices (LU/RMO) at construction time so that
+            `dx()` and `dxT()` are immediately available. If False (default), the matrices
+            are not built; call `build_differentiation()` explicitly before using `dx`/`dxT`.
 
         Raises
         ------
@@ -203,6 +208,7 @@ class Transform(AbstractTransform):
         self._n = int(polynomial_degree)
         self._p = float(lp_degree)
         self._basis = str(basis)
+        self._differentiation = bool(differentiation)
         classify(self._m, self._n, self._p)
 
         if not basis in ["newton", "chebyshev", "legendre"]:
@@ -309,39 +315,12 @@ class Transform(AbstractTransform):
                 else (None, None)
             )
 
-        # row major ordering D
-        self._spinner_label = "Row major ordering D"
-        if not is_lower_triangular(self._Dx.T):
-            Dx_lt, Dx_ut = get_lu(self._Dx)
-            Dx2_lt, Dx2_ut = get_lu(self._Dx2)
-            Dx3_lt, Dx3_ut = get_lu(self._Dx3)
-            #
-            self._Dx_lt = [get_rmo(Dx_lt), get_rmo(Dx2_lt), get_rmo(Dx3_lt)]
-            self._Dx_ut = [
-                get_rmo(Dx_ut[::-1, ::-1])[::-1],
-                get_rmo(Dx2_ut[::-1, ::-1])[::-1],
-                get_rmo(Dx3_ut[::-1, ::-1])[::-1],
-            ]
-            #
-            self._DxT_lt = [get_rmo(Dx_ut.T), get_rmo(Dx2_ut.T), get_rmo(Dx3_ut.T)]
-            self._DxT_ut = [
-                get_rmo(Dx_lt.T[::-1, ::-1])[::-1],
-                get_rmo(Dx2_lt.T[::-1, ::-1])[::-1],
-                get_rmo(Dx3_lt.T[::-1, ::-1])[::-1],
-            ]
-        else:
-            self._Dx_lt = [
-                get_rmo(self._Dx[::-1, ::-1])[::-1],
-                get_rmo(self._Dx2[::-1, ::-1])[::-1],
-                get_rmo(self._Dx3[::-1, ::-1])[::-1],
-            ]
-            self._DxT_lt = [
-                get_rmo(self._Dx.T),
-                get_rmo(self._Dx2.T),
-                get_rmo(self._Dx3.T),
-            ]
-            #
-            self._Dx_ut, self._DxT_ut = None, None
+        # differentiation matrices (LU/RMO) — built on demand
+        self._Dx_lt, self._Dx_ut = None, None
+        self._DxT_lt, self._DxT_ut = None, None
+        if self._differentiation:
+            self._spinner_label = "Row major ordering D"
+            self.build_differentiation()
 
         construction_end = time.time()
         self._construction_ms = (construction_end - construction_start) * 1000
@@ -383,6 +362,42 @@ class Transform(AbstractTransform):
         self._spinner_thread.join()
         sys.stdout.write("\r" + " " * 50 + "\r")
         sys.stdout.flush()
+
+    def build_differentiation(self) -> None:
+        """Build the differentiation matrices (LU decomposition + row-major ordering).
+
+        Called automatically at construction when ``differentiation=True``.
+        Call manually after construction when ``differentiation=False`` to enable
+        ``dx()`` and ``dxT()``.
+        """
+        if not is_lower_triangular(self._Dx.T):
+            Dx_lt, Dx_ut = get_lu(self._Dx)
+            Dx2_lt, Dx2_ut = get_lu(self._Dx2)
+            Dx3_lt, Dx3_ut = get_lu(self._Dx3)
+            self._Dx_lt = [get_rmo(Dx_lt), get_rmo(Dx2_lt), get_rmo(Dx3_lt)]
+            self._Dx_ut = [
+                get_rmo(Dx_ut[::-1, ::-1])[::-1],
+                get_rmo(Dx2_ut[::-1, ::-1])[::-1],
+                get_rmo(Dx3_ut[::-1, ::-1])[::-1],
+            ]
+            self._DxT_lt = [get_rmo(Dx_ut.T), get_rmo(Dx2_ut.T), get_rmo(Dx3_ut.T)]
+            self._DxT_ut = [
+                get_rmo(Dx_lt.T[::-1, ::-1])[::-1],
+                get_rmo(Dx2_lt.T[::-1, ::-1])[::-1],
+                get_rmo(Dx3_lt.T[::-1, ::-1])[::-1],
+            ]
+        else:
+            self._Dx_lt = [
+                get_rmo(self._Dx[::-1, ::-1])[::-1],
+                get_rmo(self._Dx2[::-1, ::-1])[::-1],
+                get_rmo(self._Dx3[::-1, ::-1])[::-1],
+            ]
+            self._DxT_lt = [
+                get_rmo(self._Dx.T),
+                get_rmo(self._Dx2.T),
+                get_rmo(self._Dx3.T),
+            ]
+            self._Dx_ut, self._DxT_ut = None, None
 
     @property
     def spatial_dimension(self) -> int:
@@ -428,10 +443,11 @@ class Transform(AbstractTransform):
         self.fnt(zeros_N)
         self._spinner_label = "Precompile inverse fast Newton transform"
         self.ifnt(zeros_N)
-        self._spinner_label = "Precompile derivative"
-        self.dx(zeros_N, 0)
-        self._spinner_label = "Precompile transposed derivative"
-        self.dxT(zeros_N, 0)
+        if self._Dx_lt is not None:
+            self._spinner_label = "Precompile derivative"
+            self.dx(zeros_N, 0)
+            self._spinner_label = "Precompile transposed derivative"
+            self.dxT(zeros_N, 0)
         self._spinner_label = "Precompile point evaluation"
         self.eval(zeros_N, one_zero)
 
@@ -671,6 +687,11 @@ class Transform(AbstractTransform):
         >>> dfdx = t.dx(coeffs_f, i=0)
         >>> dfdy2 = t.dx(coeffs_f, i=1, k=2)
         """
+        if self._Dx_lt is None:
+            raise RuntimeError(
+                "Differentiation matrices not built. "
+                "Construct with differentiation=True or call build_differentiation() first."
+            )
         coefficients, i, k = (
             np.asarray(coefficients).astype(np.float64),
             int(i),
@@ -757,6 +778,11 @@ class Transform(AbstractTransform):
         >>> adj_dfdx = t.dxT(coeffs_f, i=0)
         >>> adj_dfdy3 = t.dxT(coeffs_f, i=1, k=3)
         """
+        if self._DxT_lt is None:
+            raise RuntimeError(
+                "Differentiation matrices not built. "
+                "Construct with differentiation=True or call build_differentiation() first."
+            )
         coefficients, i, k = (
             np.asarray(coefficients).astype(np.float64),
             int(i),

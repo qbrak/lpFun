@@ -105,6 +105,7 @@ def f(x, y):
 t = Transform(
     spatial_dimension=2,
     polynomial_degree=10,
+    differentiation=True,  # required for t.dx()
     # nodes=leja_nodes # NOTE optional
 )
 
@@ -140,6 +141,7 @@ t = Transform(
     spatial_dimension=3,
     polynomial_degree=20,
     nodes=leja_nodes,  # NOTE default nodes are cheb2nd_nodes
+    differentiation=True,
 )
 
 # Dimension of the polynomial space

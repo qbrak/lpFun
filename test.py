@@ -73,6 +73,7 @@ def test_dx(m: int, p: float, ba: str, pr: bool):
             precompilation=False,
             colex_order=False,
             report=False,
+            differentiation=True,
         )
 
         def f(x):
@@ -108,6 +109,7 @@ def test_dxT(m: int, p: float, ba: str, pr: bool):
             precompilation=False,
             colex_order=False,
             report=False,
+            differentiation=True,
         )
 
         for k in [1, 2, 3]:
