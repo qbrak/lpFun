@@ -429,3 +429,38 @@ def get_lu(M: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
 #             U[i, j:] -= L[i, j] * U[j, j:]
 
 #     return P, L, U
+
+
+def warn_kronecker_amplification(
+    mat_exact: np.ndarray,
+    factor_1: np.ndarray,
+    factor_2: np.ndarray,
+    m: int,
+    operation: str,
+):
+    """
+    Checks if the sequential application of two factors across m dimensions
+    will destroy floating-point precision due to Kronecker product amplification.
+    """
+    import warnings
+
+    eps = np.finfo(np.float64).eps
+
+    norm_exact = np.linalg.norm(mat_exact, np.inf)
+    if norm_exact == 0:
+        return
+
+    norm_1 = np.linalg.norm(factor_1, np.inf)
+    norm_2 = np.linalg.norm(factor_2, np.inf)
+
+    amp_1d = (norm_1 * norm_2) / norm_exact
+    expected_error = eps * (amp_1d ** m) * len(mat_exact)
+
+    if expected_error > 1e-6:
+        warnings.warn(
+            f"Numerical instability detected in '{operation}' for m={m}. "
+            f"Unpivoted triangular factors grew by {amp_1d:.1f}x per dimension. "
+            f"Kronecker amplification pushes the expected error floor to ~{expected_error:.2e}.",
+            RuntimeWarning,
+            stacklevel=3,
+        )

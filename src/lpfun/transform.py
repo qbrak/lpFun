@@ -1,5 +1,6 @@
 import sys
 import time
+import warnings
 import threading
 import numpy as np
 from typing import Literal, Callable
@@ -34,6 +35,7 @@ from lpfun.utils import (
     get_grid,
     get_lu,
     get_rmo,
+    warn_kronecker_amplification,
     # get_lu_pivot, # TODO
 )
 
@@ -882,6 +884,122 @@ class Transform(AbstractTransform):
             return chebyshev2point(coefficients, points, self._A, self._m, self._n)
         elif self._basis == "legendre":
             return legendre2point(coefficients, points, self._A, self._m, self._n)
+
+    def apply(self, coeffs: np.ndarray, M: np.ndarray) -> np.ndarray:
+        """
+        Apply a linear operator dimension-wise to the coefficients (tensor product).
+
+        Parameters
+        ----------
+        coeffs : np.ndarray
+            Coefficients of the function in the predefined polynomial basis.
+        M : np.ndarray
+            Shape (n+1, n+1): the same matrix is applied to every dimension.
+
+        Returns
+        -------
+        np.ndarray
+            Transformed coefficients after applying M ⊗ M ⊗ … ⊗ M.
+
+        FIXME: write a function that supports different matrices for each dimension
+        """
+        coeffs = np.asarray(coeffs, dtype=np.float64)
+        M = np.asarray(M, dtype=np.float64)
+        n1 = self._n + 1
+
+        def _lu_and_check(mat):
+            L, U = get_lu(mat)
+            residual = np.linalg.norm(mat - L @ U) / max(np.linalg.norm(mat), 1e-300)
+            if residual > 1e-4:
+                raise ValueError(
+                    f"LU decomposition failed: norm(M - L@U)/norm(M) = {residual:.2e}. "
+                    "Matrix may be singular or ill-conditioned."
+                )
+            if residual > 1e-10:
+                warnings.warn(
+                    f"LU decomposition has elevated residual: norm(M - L@U)/norm(M) = {residual:.2e}. "
+                    "Results may be inaccurate.",
+                    RuntimeWarning,
+                    stacklevel=3,
+                )
+            warn_kronecker_amplification(
+                mat_exact=mat, factor_1=L, factor_2=U,
+                m=self._m, operation="apply",
+            )
+            return L, U
+
+        def _apply_matrix(mat, c):
+            L, U = _lu_and_check(mat)
+            L_rmo = get_rmo(L)
+            U_rmo = get_rmo(U[::-1, ::-1])[::-1]
+            c = itransform(
+                U_rmo, c, self._T, self._cs_T, self._V_2, self._cs_V_2,
+                self._e_T, self._N_1, self._m, self._n, self._p, mode="upper",
+            )
+            return itransform(
+                L_rmo, c, self._T, self._cs_T, self._V_2, self._cs_V_2,
+                self._e_T, self._N_1, self._m, self._n, self._p, mode="lower",
+            )
+
+        if M.shape != (n1, n1):
+            raise ValueError(f"Single matrix M must be ({n1}, {n1}), got {M.shape}")
+        return _apply_matrix(M, coeffs)
+
+    def apply_inverse(self, coeffs: np.ndarray, M: np.ndarray) -> np.ndarray:
+        """
+        Apply the inverse of a linear operator dimension-wise to the coefficients.
+
+        This is the exact inverse of :meth:`apply`: for any invertible M,
+        ``apply_inverse(apply(c, M), M) == c`` (up to floating-point precision).
+
+        Parameters
+        ----------
+        coeffs : np.ndarray
+            Coefficients to transform.
+        M : np.ndarray
+            Shape (n+1, n+1): the same matrix whose inverse is applied to every dimension.
+
+        Returns
+        -------
+        np.ndarray
+            Transformed coefficients after applying M⁻¹ ⊗ M⁻¹ ⊗ … ⊗ M⁻¹.
+        """
+        coeffs = np.asarray(coeffs, dtype=np.float64)
+        M = np.asarray(M, dtype=np.float64)
+        n1 = self._n + 1
+
+        if M.shape != (n1, n1):
+            raise ValueError(f"Single matrix M must be ({n1}, {n1}), got {M.shape}")
+
+        L, U = get_lu(M)
+        residual = np.linalg.norm(M - L @ U) / max(np.linalg.norm(M), 1e-300)
+        if residual > 1e-4:
+            raise ValueError(
+                f"LU decomposition failed: norm(M - L@U)/norm(M) = {residual:.2e}. "
+                "Matrix may be singular or ill-conditioned."
+            )
+
+        L_inv = np.linalg.inv(L)
+        U_inv = np.linalg.inv(U)
+
+        M_inv = U_inv @ L_inv
+        warn_kronecker_amplification(
+            mat_exact=M_inv, factor_1=L_inv, factor_2=U_inv,
+            m=self._m, operation="apply_inverse",
+        )
+
+        L_inv_rmo = get_rmo(L_inv)
+        U_inv_rmo = get_rmo(U_inv[::-1, ::-1])[::-1]
+
+        # Reverse order: first undo L, then undo U
+        coeffs = itransform(
+            L_inv_rmo, coeffs, self._T, self._cs_T, self._V_2, self._cs_V_2,
+            self._e_T, self._N_1, self._m, self._n, self._p, mode="lower",
+        )
+        return itransform(
+            U_inv_rmo, coeffs, self._T, self._cs_T, self._V_2, self._cs_V_2,
+            self._e_T, self._N_1, self._m, self._n, self._p, mode="upper",
+        )
 
     def embed(self, t: AbstractTransform) -> np.ndarray:
         """

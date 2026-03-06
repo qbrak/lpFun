@@ -126,6 +126,46 @@ def test_dxT(m: int, p: float, ba: str, pr: bool):
                 eps = np.abs(lhs - rhs)
                 assert eps < 1e-6
 
+@pytest.mark.parametrize("m, p, ba, pr", m_p_ba_pr)
+def test_apply_inverse_roundtrip(m: int, p: float, ba: str, pr: bool):
+    for n in NS:
+        t = lpfun.Transform(
+            m, n, p, basis=ba, precomputation=pr,
+            precompilation=False, colex_order=False, report=False,
+        )
+        coeffs = np.random.rand(len(t))
+        # A well conditioned M
+        M = np.eye(n + 1) + 0.01 * np.random.rand(n + 1, n + 1)
+        result = t.apply_inverse(t.apply(coeffs, M), M)
+        eps = np.linalg.norm(result - coeffs)
+        assert eps < 1e-8
+
+
+@pytest.mark.parametrize("m, p, ba, pr", m_p_ba_pr)
+def test_apply_matches_kronecker(m: int, p: float, ba: str, pr: bool):
+    """apply(c, M) must equal the Kronecker product M⊗...⊗M restricted to A."""
+    for n in NS:
+        t = lpfun.Transform(
+            m, n, p, basis=ba, precomputation=pr,
+            precompilation=False, colex_order=False, report=False,
+        )
+        A = t._A  # shape (N, m)
+        N = len(t)
+        if N > 1000:
+            continue  # skip large cases to keep test runtime reasonable
+        n1 = n + 1
+        M = np.random.rand(n1, n1)
+        np.fill_diagonal(M, np.sum(np.abs(M), axis=1) + 1.0)
+        # K[beta_idx, alpha_idx] = prod_d M[A[beta,d], A[alpha,d]]
+        K = np.ones((N, N))
+        for d in range(m):
+            K *= M[np.ix_(A[:, d], A[:, d])]
+        coeffs = np.random.rand(N)
+        expected = K @ coeffs
+        actual = t.apply(coeffs, M)
+        eps = np.max(np.abs(actual - expected))
+        assert eps < 1e-6
+
 
 @pytest.mark.parametrize("m, p, ba, pr", m_p_ba_pr)
 def test_eval(m: int, p: float, ba: str, pr: bool):
