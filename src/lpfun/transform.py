@@ -981,23 +981,21 @@ class Transform(AbstractTransform):
 
         L_inv = np.linalg.inv(L)
         U_inv = np.linalg.inv(U)
-
-        M_inv = U_inv @ L_inv
         warn_kronecker_amplification(
-            mat_exact=M_inv, factor_1=L_inv, factor_2=U_inv,
+            mat_exact=U_inv @ L_inv, factor_1=L_inv, factor_2=U_inv,
             m=self._m, operation="apply_inverse",
         )
 
-        L_inv_rmo = get_rmo(L_inv)
-        U_inv_rmo = get_rmo(U_inv[::-1, ::-1])[::-1]
+        L_rmo = get_rmo(L)
+        U_rmo = get_rmo(U[::-1, ::-1])[::-1]
 
-        # Reverse order: first undo L, then undo U
-        coeffs = itransform(
-            L_inv_rmo, coeffs, self._T, self._cs_T, self._V_2, self._cs_V_2,
+        # Solve M·x = c  via  L·U·x = c:  first solve L·y = c, then U·x = y
+        coeffs = transform(
+            L_rmo, coeffs, self._T, self._cs_T, self._V_2, self._cs_V_2,
             self._e_T, self._N_1, self._m, self._n, self._p, mode="lower",
         )
-        return itransform(
-            U_inv_rmo, coeffs, self._T, self._cs_T, self._V_2, self._cs_V_2,
+        return transform(
+            U_rmo, coeffs, self._T, self._cs_T, self._V_2, self._cs_V_2,
             self._e_T, self._N_1, self._m, self._n, self._p, mode="upper",
         )
 
