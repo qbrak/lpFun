@@ -1,6 +1,11 @@
 import numpy as np
 from math import gamma
-from numba import njit
+import numba as _numba
+from lpfun import CACHE
+
+def njit(*args, **kwargs):
+    kwargs.setdefault('cache', CACHE)
+    return _numba.njit(*args, **kwargs)
 
 
 @njit

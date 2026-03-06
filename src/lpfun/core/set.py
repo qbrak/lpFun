@@ -1,6 +1,11 @@
 import numpy as np
 from typing import Tuple
-from numba import njit
+import numba as _numba
+from lpfun import CACHE
+
+def njit(*args, **kwargs):
+    kwargs.setdefault('cache', CACHE)
+    return _numba.njit(*args, **kwargs)
 from itertools import product
 from lpfun.core.utils import apply_permutation, memory_estimate
 

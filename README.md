@@ -31,6 +31,7 @@
 - [Tutorial](#-tutorial)
   - [1. Short Version](#1-short-version)
   - [2. Long Version](#2-long-version)
+- [Troubleshooting](#troubleshooting)
 - [Acknowledgments](#acknowledgments)
 
 ## License
@@ -254,6 +255,25 @@ max |rec_df - values_df| = 1.03e-12
 t.eval (random points): 0.19 ms
 max |df_rand-rec_df_rand| = 5.15e-14
 ```
+
+## Troubleshooting
+
+If you encounter **segmentation faults**, they are most likely caused by stale [numba](https://numba.pydata.org/) cache files. This happens when source code changes cause compiled functions to shift line numbers, invalidating the cached binaries.
+
+**Option 1:** Clear the numba cache files:
+
+```bash
+find src -name "*.nbi" -o -name "*.nbc" | xargs rm -f
+```
+
+**Option 2:** Disable caching (useful during development):
+
+```python
+import lpfun
+lpfun.CACHE = False
+```
+
+Set this **before** importing any other `lpfun` modules (e.g. `Transform`).
 
 ## Acknowledgments
 

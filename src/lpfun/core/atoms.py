@@ -1,7 +1,14 @@
 import numpy as np
-from numba import njit, prange
-from lpfun import PARALLEL
+import numba as _numba
+from lpfun import PARALLEL, CACHE
 from lpfun.core.set import ordinal_embedding
+
+prange = _numba.prange
+
+def njit(*args, **kwargs):
+    """Wrapper around numba.njit that injects the global CACHE setting."""
+    kwargs.setdefault('cache', CACHE)
+    return _numba.njit(*args, **kwargs)
 
 """
 - This module contains numba jit-compiled functions for the transformation of a vector by a matrix.

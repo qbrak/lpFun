@@ -32,7 +32,7 @@ from lpfun.core.atoms import (
 )
 from typing import Literal
 
-
+# NOTE: do not cache, causes segfaults.
 # @njit # NOTE optional
 def transform(
     Vx: np.ndarray,
@@ -124,7 +124,8 @@ def transform(
     )
 
 
-@njit
+# NOTE: do not cache, causes segfaults.
+# @njit
 def itransform(
     Vx: np.ndarray,
     c: np.ndarray,
@@ -219,7 +220,8 @@ def itransform(
     )
 
 
-@njit
+# NOTE: do not cache, causes segfaults.
+# @njit
 def dtransform(
     Dx: np.ndarray,
     c: np.ndarray,

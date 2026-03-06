@@ -1,7 +1,14 @@
 import itertools
 import numpy as np
 from typing import Tuple
-from numba import njit, prange
+import numba as _numba
+from lpfun import CACHE
+
+prange = _numba.prange
+
+def njit(*args, **kwargs):
+    kwargs.setdefault('cache', CACHE)
+    return _numba.njit(*args, **kwargs)
 
 
 """Utility functions"""
