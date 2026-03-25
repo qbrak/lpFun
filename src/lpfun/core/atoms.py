@@ -22,7 +22,7 @@ def njit(*args, **kwargs):
 # cs_T, N_0, N_1, V_2, V_1 ?
 
 
-@njit
+@njit(inline="never")  # numba miscompiles inlined code inside parallel functions
 def reduceat(
     array: np.ndarray,
     split_indices: np.ndarray,
@@ -841,7 +841,7 @@ def transform_lt_md(
     m: int,
 ) -> np.ndarray:
     """O(Nmn)"""
-    zero = np.array([0], dtype=np.int64)
+    zero = np.zeros(1, dtype=np.int64)
     dot, V_0 = np.zeros_like(x), T.copy()
     ### 1d
     ### indexing: i > j, k
@@ -872,7 +872,9 @@ def transform_lt_md(
         for i in prange(e_T[h + 1]):
             pos, next_pos = cs_V_1[i], cs_V_1[i + 1]
             block = dot[pos:next_pos]
-            interval = np.array([pos, next_pos])
+            interval = np.empty(2, dtype=np.int64)
+            interval[0] = pos
+            interval[1] = next_pos
             pos_T, next_pos_T = np.searchsorted(cs_T, interval)
             pos_V_0, next_pos_V_0 = np.searchsorted(cs_V_0, interval)
             block_T, block_V_0 = (
@@ -932,7 +934,7 @@ def transform_ut_md(
     n: int,
 ) -> np.ndarray:
     """O(Nmn)"""
-    zero = np.array([0], dtype=np.int64)
+    zero = np.zeros(1, dtype=np.int64)
     dot, V_0 = np.zeros_like(x), T.copy()
     ### 1d
     ### indexing: i > j, k
@@ -969,7 +971,9 @@ def transform_ut_md(
         for i in prange(e_T[h + 1]):
             t_i, pos, next_pos = T[i], cs_V_1[i], cs_V_1[i + 1]
             block = dot[pos:next_pos]
-            interval = np.array([pos, next_pos])
+            interval = np.empty(2, dtype=np.int64)
+            interval[0] = pos
+            interval[1] = next_pos
             pos_T, next_pos_T = np.searchsorted(cs_T, interval)
             pos_V_0, next_pos_V_0 = np.searchsorted(cs_V_0, interval)
             block_T, block_V_0 = (
@@ -1039,7 +1043,7 @@ def itransform_lt_md(
     m: int,
 ) -> np.ndarray:
     """O(Nmn)"""
-    zero = np.array([0], dtype=np.int64)
+    zero = np.zeros(1, dtype=np.int64)
     dot, V_0 = np.zeros_like(x), T.copy()
     ### 1d
     ### indexing: i > j, k
@@ -1070,7 +1074,9 @@ def itransform_lt_md(
         for i in prange(e_T[h + 1]):
             pos, next_pos = cs_V_1[i], cs_V_1[i + 1]
             block = dot[pos:next_pos]
-            interval = np.array([pos, next_pos])
+            interval = np.empty(2, dtype=np.int64)
+            interval[0] = pos
+            interval[1] = next_pos
             pos_T, next_pos_T = np.searchsorted(cs_T, interval)
             pos_V_0, next_pos_V_0 = np.searchsorted(cs_V_0, interval)
             block_T, block_V_0 = (
@@ -1124,7 +1130,7 @@ def itransform_ut_md(
     n: int,
 ) -> np.ndarray:
     """O(Nmn)"""
-    zero = np.array([0], dtype=np.int64)
+    zero = np.zeros(1, dtype=np.int64)
     dot, V_0 = np.zeros_like(x), T.copy()
     ### 1d
     ### indexing: i > j, k
@@ -1155,7 +1161,9 @@ def itransform_ut_md(
         for i in prange(e_T[h + 1]):
             pos, next_pos = cs_V_1[i], cs_V_1[i + 1]
             block = dot[pos:next_pos]
-            interval = np.array([pos, next_pos])
+            interval = np.empty(2, dtype=np.int64)
+            interval[0] = pos
+            interval[1] = next_pos
             pos_T, next_pos_T = np.searchsorted(cs_T, interval)
             pos_V_0, next_pos_V_0 = np.searchsorted(cs_V_0, interval)
             block_T, block_V_0 = (
@@ -1210,7 +1218,7 @@ def dtransform_lt_md(
     """O(Nn)"""
     N1, cs_T = (
         len(T),
-        np.concatenate((np.array([0]), np.cumsum(T))),
+        np.concatenate((np.zeros(1, dtype=np.int64), np.cumsum(T))),
     )
     ###
     dot = np.zeros_like(x)
