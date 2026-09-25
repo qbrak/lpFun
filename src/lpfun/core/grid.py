@@ -67,6 +67,55 @@ def get_leja_order(nodes: np.ndarray, limit: int = -1) -> np.ndarray:
 
 
 @njit
+def get_leja_dyadic_order(J: int) -> np.ndarray:
+    """O(4^J)
+
+    Order of the Lobatto grid cos(l pi / 2^J), l = 0..2^J, as the dyadically nested,
+    Leja ordered sequence
+
+        P_0 = Cheb_1 = (1, -1),  P_{k+1} = (P_k, Leja(Cheb_{2^{k+1}} \\ Cheb_{2^k})).
+
+    At every level the new nodes are appended greedily, maximizing the product of
+    distances to all nodes chosen so far. Every prefix of length 2^k + 1 is the full
+    grid Cheb_{2^k}. Returns the Lobatto indices l in this order.
+    """
+    n = 1 << J
+    x = np.cos(np.arange(n + 1) * np.pi / n)
+    order = np.empty(n + 1, dtype=np.int64)
+    order[0] = 0
+    order[1] = n
+    count = 2
+    for k in range(1, J + 1):
+        step = n >> k
+        num_new = 1 << (k - 1)
+        new = np.arange(step, n, 2 * step)
+        # log-product of distances to the nodes chosen so far
+        logp = np.zeros(num_new, dtype=np.float64)
+        for a in range(num_new):
+            for b in range(count):
+                logp[a] += np.log(np.abs(x[new[a]] - x[order[b]]))
+        remaining = np.ones(num_new, dtype=np.bool_)
+        for _ in range(num_new):
+            best = -np.inf
+            for a in range(num_new):
+                if remaining[a] and logp[a] > best:
+                    best = logp[a]
+            # x and -x tie up to rounding: take the first, i.e. the larger node
+            i = 0
+            for a in range(num_new):
+                if remaining[a] and logp[a] >= best - 1e-9:
+                    i = a
+                    break
+            remaining[i] = False
+            order[count] = new[i]
+            count += 1
+            for a in range(num_new):
+                if a != i:
+                    logp[a] += np.log(np.abs(x[new[a]] - x[new[i]]))
+    return order
+
+
+@njit
 def _get_grid(
     nodes: np.ndarray,
     A: np.ndarray,

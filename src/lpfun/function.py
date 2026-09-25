@@ -3,7 +3,7 @@ import time
 import warnings
 import threading
 import numpy as np
-from typing import Literal, Callable
+from typing import Literal, Callable, Tuple
 from abc import ABC, abstractmethod
 
 from lpfun.utils import (
@@ -17,6 +17,12 @@ from lpfun.utils import (
 from lpfun.core.grid import (
     get_leja_order,
     get_grid,
+)
+from lpfun.core.crop import (
+    get_bucket,
+    get_omega,
+    omega_seen,
+    omega_unseen,
 )
 from lpfun.core.set import (
     lp_set,
@@ -49,6 +55,7 @@ from lpfun.basis.eval import (
 from lpfun.basis.nodes import (
     cheb2nd_nodes,
     leja_nodes,  # NOTE alternative for adaptivity
+    leja_dyadic_nodes,  # NOTE nested Chebyshev grids, for cropped solves
 )
 from lpfun.basis.vander import (
     newton2lagrange,
@@ -140,6 +147,7 @@ class Function(AbstractFunction):
         precompilation: bool = True,
         threshold: int = 150_000_000,
         report: bool = True,
+        leja_ordering: bool = True,
     ):
         """
         Initialize the `Function` object for multivariate polynomial interpolation on quasi-tensorial grids.
@@ -156,6 +164,9 @@ class Function(AbstractFunction):
         nodes : callable, optional
             A callable that takes an integer `n` and returns an array of `n` one-dimensional distinct interpolation nodes.
             Typical choices are Chebyshev nodes `cheb2nd_nodes` or Leja nodes `leja_nodes`.
+            The nodes are brought into Leja order unless `leja_ordering` is False, in which
+            case the callable is asked for the whole bucket `get_bucket(n + 1)` and the first
+            `n + 1` nodes form the grid.
         basis: str, optional
             The polynomial basis used for constructing Vandermonde and differentiation matrices.
             The default is "newton".
@@ -172,6 +183,12 @@ class Function(AbstractFunction):
             The default is 150,000,000.
         report:
             If True, print initialization information and setup statistics.
+            The default is True.
+        leja_ordering : bool, optional
+            If True, the nodes are reordered greedily into Leja order.
+            Set to False for node sequences that are already ordered, e.g. `leja_dyadic_nodes`,
+            whose dyadic prefixes are full Chebyshev grids. Only then are the nodal polynomials
+            used by cropped solves precomputed, see `omega`.
             The default is True.
 
         Raises
@@ -243,11 +260,24 @@ class Function(AbstractFunction):
 
         # nodes
         self._spinner_label = "Constructing nodes..."
-        x = nodes(self._n + 1)
-        if len(np.unique(x)) != self._n + 1:
+        self._x_bucket = None
+        if leja_ordering:
+            x = np.asarray(nodes(self._n + 1), dtype=np.float64)
+        else:
+            # ordered sequence: ask for the whole bucket M = 2^j + 1 >= n + 1, the first
+            # n + 1 nodes are the grid, the remaining ones serve the cropped solves
+            M_top = get_bucket(self._n + 1)
+            x = np.asarray(nodes(M_top), dtype=np.float64)
+            if len(x) >= M_top:
+                self._x_bucket = x[:M_top]
+            x = x[: self._n + 1]
+        if len(x) != self._n + 1 or len(np.unique(x)) != self._n + 1:
             self._stop_spinner() if report else None
             raise ValueError("The provided nodes are not pairwise distinct.")
-        self._leja_order = get_leja_order(x)
+        if leja_ordering:
+            self._leja_order = get_leja_order(x)
+        else:
+            self._leja_order = np.arange(self._n + 1, dtype=np.int64)
         self._x = x[self._leja_order]
 
         # grid
@@ -304,6 +334,12 @@ class Function(AbstractFunction):
         if precomputation and not lt_Vx:
             self._inv_Vx_L = get_rmo(np.linalg.inv(Vx_L))
             self._inv_Vx_U = get_rmo(np.linalg.inv(Vx_U)[::-1, ::-1])[::-1]
+
+        # Precompute nodal polynomials of the unseen nodes (cropped solves)
+        self._spinner_label = "Precomputing nodal polynomials..."
+        self._omega = None
+        if precomputation and self._x_bucket is not None:
+            self._omega = get_omega(self._x_bucket, self._n + 1)
 
         construction_end = time.time()
         self._construction_ms = (construction_end - construction_start) * 1000
@@ -397,6 +433,41 @@ class Function(AbstractFunction):
             "V_2": self._V_2 if hasattr(self, "_V_2") else None,
             "cs_V_2": self._cs_V_2 if hasattr(self, "_cs_V_2") else None,
         }
+
+    def omega(self, N: int) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Nodal polynomial of the unseen nodes for the cropped size `N`.
+
+        For the first `N` nodes (seen, S) inside their bucket M = 2^j + 1 >= N, the remaining
+        r = M - N bucket nodes are unseen (U) and Omega_U(x) = prod_{p in U} 2 (x - p).
+
+        Parameters
+        ----------
+        N : int
+            Cropped size, 1 <= N <= n + 1.
+
+        Returns
+        -------
+        Tuple[np.ndarray, np.ndarray]
+            Omega_U at the N seen nodes and Omega_U' at the r unseen nodes.
+
+        Raises
+        ------
+        ValueError
+            If the tables are unavailable: `leja_ordering` was True, or the `nodes`
+            callable returned fewer than `get_bucket(n + 1)` nodes.
+        """
+        if self._x_bucket is None:
+            raise ValueError(
+                "Omega requires an ordered node sequence covering the whole bucket, "
+                "e.g. nodes=leja_dyadic_nodes with leja_ordering=False."
+            )
+        if self._omega is None:
+            self._omega = get_omega(self._x_bucket, self._n + 1)
+        if not 1 <= N <= self._n + 1:
+            raise ValueError(f"The cropped size N must satisfy 1 <= N <= {self._n + 1}.")
+        omega, offsets = self._omega
+        return omega_seen(omega, offsets, N), omega_unseen(omega, offsets, N)
 
     def warmup(self) -> None:
         """Warmup the JIT compiler."""

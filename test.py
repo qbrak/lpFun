@@ -162,3 +162,99 @@ def test_call(m: int, p: float, ba: str, pr: bool):
         reconstruction = fun(coeffs, points)
         eps = np.max(np.abs(reconstruction - function_value))
         assert eps < 1e-6
+
+
+@pytest.mark.parametrize("J", [0, 1, 2, 3, 4, 5, 6, 8])
+def test_leja_dyadic_order(J: int):
+    order = lpfun.core.grid.get_leja_dyadic_order(J)
+    n = 1 << J
+    assert len(np.unique(order)) == n + 1
+    # every dyadic prefix is the full grid Cheb_{2^j}
+    for j in range(J + 1):
+        prefix = order[: (1 << j) + 1] >> (J - j)
+        assert sorted(prefix) == list(range((1 << j) + 1))
+    # worked example: 1, -1, 0, +-sqrt2/2, +-cos(3pi/8), +-cos(pi/8)
+    if J >= 3:
+        x = np.cos(order[:9] * np.pi / n)
+        expected = [1, -1, 0, np.sqrt(2) / 2, -np.sqrt(2) / 2]
+        assert np.allclose(x[:5], expected)
+        assert np.allclose(np.abs(x[5:7]), np.cos(3 * np.pi / 8))
+        assert np.allclose(np.abs(x[7:9]), np.cos(np.pi / 8))
+
+
+@pytest.mark.parametrize("n", [1, 2, 3, 7, 8, 9, 20, 33, 35])
+def test_leja_dyadic_nodes(n: int):
+    x = lpfun.basis.nodes.leja_dyadic_nodes(n)
+    assert len(x) == n
+    assert len(np.unique(x)) == n
+    # prefix property
+    assert np.array_equal(lpfun.basis.nodes.leja_dyadic_nodes(n + 5)[:n], x)
+
+
+def _omega_naive(x, N):
+    M = lpfun.core.crop.get_bucket(N)
+    xs, xu = x[:N], x[N:M]
+    om_S = np.array([np.prod(2 * (s - xu)) for s in xs])
+    om_U = np.array(
+        [2 * np.prod([2 * (xu[u] - xu[v]) for v in range(len(xu)) if v != u]) for u in range(len(xu))]
+    )
+    return om_S, om_U
+
+
+@pytest.mark.parametrize("N_max", [1, 2, 5, 9, 20, 35])
+def test_omega(N_max: int):
+    M_top = lpfun.core.crop.get_bucket(N_max)
+    x = lpfun.basis.nodes.leja_dyadic_nodes(M_top)
+    omega, offsets = lpfun.core.crop.get_omega(x, N_max)
+    assert offsets[-1] == sum(lpfun.core.crop.get_bucket(N) for N in range(N_max + 1))
+    for N in range(1, N_max + 1):
+        om_S = lpfun.core.crop.omega_seen(omega, offsets, N)
+        om_U = lpfun.core.crop.omega_unseen(omega, offsets, N)
+        om_S_ref, om_U_ref = _omega_naive(x, N)
+        assert len(om_S) == N and len(om_U) == lpfun.core.crop.get_bucket(N) - N
+        assert np.allclose(om_S, om_S_ref, rtol=1e-12, atol=0)
+        assert np.allclose(om_U, om_U_ref, rtol=1e-12, atol=0)
+    # worked example N = 7, M = 9: Omega = 2 T_2 - sqrt2, Omega' = 8 x
+    if N_max >= 7:
+        om_S = lpfun.core.crop.omega_seen(omega, offsets, 7)
+        om_U = lpfun.core.crop.omega_unseen(omega, offsets, 7)
+        assert np.allclose(om_S, 2 * (2 * x[:7] ** 2 - 1) - np.sqrt(2))
+        assert np.allclose(om_U, 8 * x[7:9])
+
+
+@pytest.mark.parametrize("n, pr", list(product([3, 7, 8, 10], precomputation)))
+def test_function_omega(n: int, pr: bool):
+    fun = lpfun.Function(
+        1,
+        n,
+        basis="chebyshev",
+        nodes=lpfun.basis.nodes.leja_dyadic_nodes,
+        leja_ordering=False,
+        precomputation=pr,
+        precompilation=False,
+        report=False,
+    )
+    assert np.array_equal(fun.nodes, lpfun.basis.nodes.leja_dyadic_nodes(n + 1))
+    assert np.array_equal(fun.leja_order, np.arange(n + 1))
+    x = lpfun.basis.nodes.leja_dyadic_nodes(lpfun.core.crop.get_bucket(n + 1))
+    for N in range(1, n + 2):
+        om_S, om_U = fun.omega(N)
+        om_S_ref, om_U_ref = _omega_naive(x, N)
+        assert np.allclose(om_S, om_S_ref, rtol=1e-12, atol=0)
+        assert np.allclose(om_U, om_U_ref, rtol=1e-12, atol=0)
+    # reordered nodes, or a callable that does not cover the bucket: no Omega tables
+    cases = [
+        dict(),
+        dict(nodes=lpfun.basis.nodes.leja_dyadic_nodes, leja_ordering=True),
+    ]
+    if lpfun.core.crop.get_bucket(n + 1) > n + 1:  # a fixed-size callable misses the bucket
+        cases.append(dict(nodes=lambda k: lpfun.basis.nodes.leja_dyadic_nodes(n + 1), leja_ordering=False))
+    for kwargs in cases:
+        fun = lpfun.Function(1, n, precomputation=pr, precompilation=False, report=False, **kwargs)
+        with pytest.raises(ValueError):
+            fun.omega(1)
+
+
+def test_leja_nodes_sample_size():
+    with pytest.raises(ValueError):
+        lpfun.basis.nodes.leja_nodes(9, m=7)
