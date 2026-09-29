@@ -283,3 +283,23 @@ def test_leja_order_no_underflow():
     order = lpfun.core.grid.get_leja_order(x, limit=2000)
     assert len(np.unique(order)) == 2000
     assert not np.all(np.diff(order[1100:]) > 0)
+
+
+@pytest.mark.parametrize("n", [0, 1, 2, 3, 8, 9, 33])
+def test_chebyshev_derivative(n: int):
+    a = np.random.rand(n + 1)
+    b = lpfun.basis.diff.chebyshev_derivative(a)
+    assert b.shape == a.shape and b[-1] == 0
+    # the O(n^2) matrix in this repo
+    Dx = lpfun.basis.diff.chebyshev2derivative(np.zeros(n + 1))
+    assert np.allclose(b, Dx @ a)
+    # numpy's reference (one entry shorter)
+    if n >= 1:
+        assert np.allclose(b[:-1], np.polynomial.chebyshev.chebder(a))
+    # worked check: h = T_2 = 2x^2 - 1, h' = 4x = 4 T_1
+    if n >= 2:
+        e2 = np.zeros(n + 1)
+        e2[2] = 1
+        expected = np.zeros(n + 1)
+        expected[1] = 4
+        assert np.allclose(lpfun.basis.diff.chebyshev_derivative(e2), expected)
