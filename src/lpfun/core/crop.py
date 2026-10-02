@@ -32,9 +32,18 @@ def get_omega(x: np.ndarray, N_max: int) -> Tuple[np.ndarray, np.ndarray]:
     For N inside the bucket M = get_bucket(N) with seen nodes S = x[:N] and unseen
     nodes U = x[N:M], r = M - N,
 
-        Omega_U(y) = prod_{p in U} 2 (y - p),
+        Omega_U(y) = prod_{p in U} 2 (y - p).
 
-    the row for N has length M and holds
+    Going from N to N - 1 makes one more node unseen, p_N = x[N - 1], so Omega gains
+    the single factor 2 (y - p_N); evaluating that identity and its derivative
+    (product rule, using Omega^(N)(p_i) = 0 for unseen p_i) gives the recurrence
+    (readable_summary.tex, Sec. 8)
+
+        Omega^(N-1)(p_i)  = Omega^(N)(p_i)  * 2 (p_i - p_N)     i < N   (seen)
+        Omega^(N-1)'(p_i) = Omega^(N)'(p_i) * 2 (p_i - p_N)     i > N   (unseen)
+        Omega^(N-1)'(p_N) = 2 Omega^(N)(p_N)                            (new unseen)
+
+    which is what the inner loop below applies. The row for N has length M and holds
 
         row[:N] = Omega_U(x[:N])   (values at the seen nodes)
         row[N:] = Omega_U'(x[N:M]) (derivative at the unseen nodes).
@@ -42,8 +51,7 @@ def get_omega(x: np.ndarray, N_max: int) -> Tuple[np.ndarray, np.ndarray]:
     Rows are stored flat: row for N is omega[offsets[N] : offsets[N + 1]].
     ``x`` must contain at least get_bucket(N_max) nodes in Leja dyadic order.
 
-    Computed by descending N inside each bucket; when p = x[N - 1] moves from S to U,
-    Omega picks up the factor 2 (x_i - p) on S and U, and Omega_U'(p) = 2 Omega(p).
+    Computed by descending N inside each bucket, starting from N = M where Omega = 1.
     """
     M_top = get_bucket(N_max)
     if x.shape[0] < M_top:
