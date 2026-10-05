@@ -26,6 +26,10 @@ from lpfun.core.crop import (
     crop_solve,
     crop_eval,
 )
+from lpfun.core.sweep import (
+    interp_2d,
+    eval_2d,
+)
 from lpfun.core.set import (
     lp_set,
     lp_tube,
@@ -197,7 +201,7 @@ class Function(AbstractFunction):
             Algorithm for `interp` and `eval`. "lu" uses the tube-wise triangular transforms
             of the (LU-factored) Vandermonde matrix for every basis. "fct" uses fast cosine
             transforms with cropped solves; it requires the Chebyshev basis, `leja_dyadic_nodes`
-            with `leja_ordering=False`, and is currently implemented for `spatial_dimension=1`.
+            with `leja_ordering=False`, and is currently implemented for `spatial_dimension` 1 and 2.
             "auto" picks "fct" where available and "lu" otherwise.
             The default is "auto".
 
@@ -305,12 +309,12 @@ class Function(AbstractFunction):
                 self._lidx, self._J = lidx, (n_top).bit_length() - 1
 
         # transform selection
-        fct_available = basis == "chebyshev" and self._lidx is not None and self._m == 1
+        fct_available = basis == "chebyshev" and self._lidx is not None and self._m <= 2
         if transform == "fct" and not fct_available:
             self._stop_spinner() if report else None
             raise ValueError(
                 "transform='fct' requires basis='chebyshev', nodes=leja_dyadic_nodes with "
-                "leja_ordering=False, and spatial_dimension=1 (multi-dimensional sweep not yet implemented)."
+                "leja_ordering=False, and spatial_dimension <= 2 (higher dimensions not yet implemented)."
             )
         self._transform = "fct" if (transform == "fct" or (transform == "auto" and fct_available)) else "lu"
 
@@ -553,7 +557,9 @@ class Function(AbstractFunction):
         function_values = np.asarray(function_values).astype(np.float64)
         if self._transform == "fct":
             omega, offsets = self._omega_tables()
-            return crop_solve(function_values, self._lidx, self._J, omega, offsets, True)
+            if self._m == 1:
+                return crop_solve(function_values, self._lidx, self._J, omega, offsets, True)
+            return interp_2d(function_values, self._T, self._cs_T, self._lidx, self._J, omega, offsets)
         if hasattr(self, "_inv_Vx"):
             return transform_lt(
                 L=self._inv_Vx, x=function_values, **self._transform_args
@@ -608,7 +614,9 @@ class Function(AbstractFunction):
         """
         coefficients = np.asarray(coefficients).astype(np.float64)
         if self._transform == "fct":
-            return crop_eval(coefficients, self._lidx, self._J)
+            if self._m == 1:
+                return crop_eval(coefficients, self._n + 1, self._lidx, self._J)
+            return eval_2d(coefficients, self._T, self._cs_T, self._lidx, self._J)
         function_values = np.zeros(len(self), dtype=np.float64)
         if hasattr(self, "_Vx"):
             function_values = transform_lt(

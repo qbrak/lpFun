@@ -220,18 +220,21 @@ def fct_interp(f: np.ndarray, lob: np.ndarray) -> np.ndarray:
 
 
 @njit
-def crop_eval(c: np.ndarray, lidx: np.ndarray, J: int) -> np.ndarray:
+def crop_eval(c: np.ndarray, K: int, lidx: np.ndarray, J: int) -> np.ndarray:
     """O(M log M)
 
-    Values at the first N nodes of the polynomial with the N Chebyshev coefficients c:
-    zero-pad to the bucket, one forward FCT, keep the first N entries.
+    Values at the first K nodes of the polynomial with the L Chebyshev coefficients c
+    (L and K arbitrary): zero-pad to the bucket of max(L, K), one forward FCT, keep the
+    first K entries. K = L is the forward counterpart of crop_solve; K > L extrapolates
+    a tube polynomial to later nodes; K < L evaluates a longer polynomial on a prefix.
     """
-    N = c.shape[0]
-    M = get_bucket(N)
-    lob = get_lobatto(lidx, J, N)
+    L = c.shape[0]
+    size = max(L, K)
+    M = get_bucket(size)
+    lob = get_lobatto(lidx, J, size)
     a = np.zeros(M, dtype=np.float64)
-    a[:N] = c
-    return fct_eval(a, lob)[:N]
+    a[:L] = c
+    return fct_eval(a, lob)[:K]
 
 
 @njit

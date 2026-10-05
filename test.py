@@ -340,7 +340,7 @@ def test_crop_solve(J: int, refine: bool):
         c = lpfun.core.crop.crop_solve(f, lidx, J, omega, offsets, refine)
         c_ref = np.linalg.solve(_cheb_vander(lidx, J, N), f)
         assert np.allclose(c, c_ref, rtol=1e-11, atol=1e-13)
-        assert np.allclose(lpfun.core.crop.crop_eval(c, lidx, J), f, rtol=1e-11, atol=1e-13)
+        assert np.allclose(lpfun.core.crop.crop_eval(c, N, lidx, J), f, rtol=1e-11, atol=1e-13)
         # the discarded coefficients N..M-1 are zero up to rounding (free check)
         assert lpfun.core.crop.crop_tail(f, lidx, J, omega, offsets) < 1e-13
     # paper's worked example: nodes 1, -1 -> c = ((f1 + f2) / 2, (f1 - f2) / 2)
@@ -381,11 +381,56 @@ def test_function_transform_selection():
             1, 5, nodes=lpfun.basis.nodes.leja_dyadic_nodes, leja_ordering=False,
             transform="fct", precompilation=False, report=False,
         )
-    # multi-dimensional: not yet implemented -> auto falls back, explicit fct raises
+    # three dimensions: not yet implemented -> auto falls back, explicit fct raises
     kwargs = dict(basis="chebyshev", nodes=lpfun.basis.nodes.leja_dyadic_nodes, leja_ordering=False,
                   precompilation=False, report=False)
-    assert lpfun.Function(2, 5, **kwargs)._transform == "lu"
+    assert lpfun.Function(3, 5, **kwargs)._transform == "lu"
     with pytest.raises(ValueError):
-        lpfun.Function(2, 5, transform="fct", **kwargs)
+        lpfun.Function(3, 5, transform="fct", **kwargs)
     with pytest.raises(ValueError):
         lpfun.Function(1, 5, transform="dct", **kwargs)
+
+
+def _dense_vander_A(fun):
+    """Dense Vandermonde on P_A: V[a, b] = prod_d T_{beta_d}(p_{alpha_d}), alpha, beta in A."""
+    A = fun.index_set
+    theta = np.arccos(np.clip(fun.nodes, -1, 1))
+    V = np.ones((len(A), len(A)))
+    for d in range(A.shape[1]):
+        V *= np.cos(np.outer(theta[A[:, d]], A[:, d]))
+    return V
+
+
+@pytest.mark.parametrize("n, p", list(product([2, 3, 5, 8, 11], [1.0, 2.0, np.inf])))
+def test_function_fct_2d(n: int, p: float):
+    kwargs = dict(
+        basis="chebyshev",
+        nodes=lpfun.basis.nodes.leja_dyadic_nodes,
+        leja_ordering=False,
+        precompilation=False,
+        report=False,
+    )
+    fct = lpfun.Function(2, n, p, transform="fct", **kwargs)
+    lu = lpfun.Function(2, n, p, transform="lu", **kwargs)
+    assert lpfun.Function(2, n, p, **kwargs)._transform == "fct"
+    f = np.random.rand(len(fct))
+    c_fct, c_lu = fct.interp(f), lu.interp(f)
+    assert np.allclose(c_fct, c_lu, rtol=1e-9, atol=1e-11)
+    assert np.allclose(fct.eval(c_fct), f, rtol=1e-10, atol=1e-12)
+    assert np.allclose(fct.eval(c_lu), lu.eval(c_lu), rtol=1e-9, atol=1e-11)
+    if len(fct) <= 100:  # independent dense reference on the grid
+        c_ref = np.linalg.solve(_dense_vander_A(fct), f)
+        assert np.allclose(c_fct, c_ref, rtol=1e-9, atol=1e-11)
+
+
+def test_function_fct_2d_counterexample():
+    # readable_summary.tex Sec. 9: A = {(0,0),(1,0),(0,1)}, Q = x; the naive sweep returns
+    # 1/2 - y/2 + x, the corrected one must return x exactly
+    fun = lpfun.Function(
+        2, 1, 1.0, basis="chebyshev", nodes=lpfun.basis.nodes.leja_dyadic_nodes,
+        leja_ordering=False, transform="fct", precompilation=False, report=False,
+    )
+    f = fun.grid[:, 0]  # Q(x, y) = x
+    c = fun.interp(f)
+    expected = np.array([1.0 if tuple(a) == (1, 0) else 0.0 for a in fun.index_set])
+    assert np.allclose(c, expected, atol=1e-14)
