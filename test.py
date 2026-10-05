@@ -303,3 +303,89 @@ def test_chebyshev_derivative(n: int):
         expected = np.zeros(n + 1)
         expected[1] = 4
         assert np.allclose(lpfun.basis.diff.chebyshev_derivative(e2), expected)
+
+
+def _fct_setup(J: int):
+    lidx = lpfun.core.grid.get_leja_dyadic_order(J)
+    x = np.cos(lidx * np.pi / (1 << J))
+    return x, lidx
+
+
+def _cheb_vander(lidx, J, N):
+    # dense Chebyshev Vandermonde T_k(x_i) for the first N nodes, built from the Lobatto
+    # indices: cos(l k pi / n) is exact where arccos(x) near +-1 is not
+    return np.cos(np.outer(lidx[:N], np.arange(N)) * np.pi / (1 << J))
+
+
+@pytest.mark.parametrize("J", [0, 1, 2, 3, 5, 7])
+def test_fct_eval_interp(J: int):
+    x, lidx = _fct_setup(J)
+    M = (1 << J) + 1
+    lob = lpfun.core.crop.get_lobatto(lidx, J, M)
+    V = _cheb_vander(lidx, J, M)
+    a = np.random.rand(M)
+    f = np.random.rand(M)
+    assert np.allclose(lpfun.core.crop.fct_eval(a, lob), V @ a, rtol=1e-12, atol=1e-12)
+    assert np.allclose(lpfun.core.crop.fct_interp(f, lob), np.linalg.solve(V, f), rtol=1e-10, atol=1e-12)
+    assert np.allclose(lpfun.core.crop.fct_interp(lpfun.core.crop.fct_eval(a, lob), lob), a, rtol=1e-12, atol=1e-12)
+
+
+@pytest.mark.parametrize("J, refine", list(product([2, 4, 6], [False, True])))
+def test_crop_solve(J: int, refine: bool):
+    x, lidx = _fct_setup(J)
+    N_max = (1 << J) + 1
+    omega, offsets = lpfun.core.crop.get_omega(x, N_max)
+    for N in range(1, N_max + 1):
+        f = np.random.rand(N)
+        c = lpfun.core.crop.crop_solve(f, lidx, J, omega, offsets, refine)
+        c_ref = np.linalg.solve(_cheb_vander(lidx, J, N), f)
+        assert np.allclose(c, c_ref, rtol=1e-11, atol=1e-13)
+        assert np.allclose(lpfun.core.crop.crop_eval(c, lidx, J), f, rtol=1e-11, atol=1e-13)
+        # the discarded coefficients N..M-1 are zero up to rounding (free check)
+        assert lpfun.core.crop.crop_tail(f, lidx, J, omega, offsets) < 1e-13
+    # paper's worked example: nodes 1, -1 -> c = ((f1 + f2) / 2, (f1 - f2) / 2)
+    f = np.array([0.3, -1.1])
+    assert np.allclose(lpfun.core.crop.crop_solve(f, lidx, J, omega, offsets, refine), [-0.4, 0.7])
+
+
+@pytest.mark.parametrize("n, pr", list(product([3, 7, 8, 10, 20], precomputation)))
+def test_function_fct_1d(n: int, pr: bool):
+    kwargs = dict(
+        basis="chebyshev",
+        nodes=lpfun.basis.nodes.leja_dyadic_nodes,
+        leja_ordering=False,
+        precomputation=pr,
+        precompilation=False,
+        report=False,
+    )
+    fct = lpfun.Function(1, n, transform="fct", **kwargs)
+    lu = lpfun.Function(1, n, transform="lu", **kwargs)
+    auto = lpfun.Function(1, n, **kwargs)
+    assert fct._transform == "fct" and lu._transform == "lu" and auto._transform == "fct"
+    f = np.random.rand(len(fct))
+    c_fct, c_lu = fct.interp(f), lu.interp(f)
+    assert np.allclose(c_fct, c_lu, rtol=1e-9, atol=1e-12)
+    assert np.allclose(fct.eval(c_fct), f, rtol=1e-11, atol=1e-13)
+    assert np.allclose(fct.eval(c_lu), lu.eval(c_lu), rtol=1e-9, atol=1e-12)
+
+
+def test_function_transform_selection():
+    # default nodes: fct unavailable -> auto falls back to lu, explicit fct raises
+    fun = lpfun.Function(1, 5, basis="chebyshev", precompilation=False, report=False)
+    assert fun._transform == "lu"
+    with pytest.raises(ValueError):
+        lpfun.Function(1, 5, basis="chebyshev", transform="fct", precompilation=False, report=False)
+    # newton basis with dyadic nodes: fct unavailable
+    with pytest.raises(ValueError):
+        lpfun.Function(
+            1, 5, nodes=lpfun.basis.nodes.leja_dyadic_nodes, leja_ordering=False,
+            transform="fct", precompilation=False, report=False,
+        )
+    # multi-dimensional: not yet implemented -> auto falls back, explicit fct raises
+    kwargs = dict(basis="chebyshev", nodes=lpfun.basis.nodes.leja_dyadic_nodes, leja_ordering=False,
+                  precompilation=False, report=False)
+    assert lpfun.Function(2, 5, **kwargs)._transform == "lu"
+    with pytest.raises(ValueError):
+        lpfun.Function(2, 5, transform="fct", **kwargs)
+    with pytest.raises(ValueError):
+        lpfun.Function(1, 5, transform="dct", **kwargs)

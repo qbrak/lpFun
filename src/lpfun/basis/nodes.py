@@ -1,6 +1,5 @@
 import numpy as np
 from lpfun.core.grid import get_leja_order, get_leja_dyadic_order
-from lpfun.core.crop import get_bucket
 
 
 def cheb2nd_nodes(n: int) -> np.ndarray:
@@ -46,6 +45,8 @@ def leja_dyadic_nodes(n: int) -> np.ndarray:
         raise ValueError("The parameter ``n`` should be non-negative.")
     if n == 0:
         return np.zeros(1, dtype=np.float64)
+    from lpfun.core.crop import get_bucket  # local import: crop imports basis.diff
+
     J = (get_bucket(n) - 1).bit_length() - 1  # bucket 2^J + 1 >= n
     order = get_leja_dyadic_order(J)
     return np.cos(order[:n] * np.pi / (1 << J))

@@ -23,6 +23,8 @@ from lpfun.core.crop import (
     get_omega,
     omega_seen,
     omega_unseen,
+    crop_solve,
+    crop_eval,
 )
 from lpfun.core.set import (
     lp_set,
@@ -148,6 +150,7 @@ class Function(AbstractFunction):
         threshold: int = 150_000_000,
         report: bool = True,
         leja_ordering: bool = True,
+        transform: Literal["auto", "lu", "fct"] = "auto",
     ):
         """
         Initialize the `Function` object for multivariate polynomial interpolation on quasi-tensorial grids.
@@ -190,6 +193,13 @@ class Function(AbstractFunction):
             whose dyadic prefixes are full Chebyshev grids. Only then are the nodal polynomials
             used by cropped solves precomputed, see `omega`.
             The default is True.
+        transform : str, optional
+            Algorithm for `interp` and `eval`. "lu" uses the tube-wise triangular transforms
+            of the (LU-factored) Vandermonde matrix for every basis. "fct" uses fast cosine
+            transforms with cropped solves; it requires the Chebyshev basis, `leja_dyadic_nodes`
+            with `leja_ordering=False`, and is currently implemented for `spatial_dimension=1`.
+            "auto" picks "fct" where available and "lu" otherwise.
+            The default is "auto".
 
         Raises
         ------
@@ -225,6 +235,9 @@ class Function(AbstractFunction):
         if not basis in ["newton", "chebyshev", "legendre"]:
             self._stop_spinner() if report else None
             raise ValueError("Invalid choice for basis.")
+        if not transform in ["auto", "lu", "fct"]:
+            self._stop_spinner() if report else None
+            raise ValueError("Invalid choice for transform.")
 
         # index set
         self._spinner_label = "Constructing index set..."
@@ -279,6 +292,27 @@ class Function(AbstractFunction):
         else:
             self._leja_order = np.arange(self._n + 1, dtype=np.int64)
         self._x = x[self._leja_order]
+
+        # Lobatto indices of the bucket nodes (needed by the fast cosine transforms)
+        self._lidx, self._J = None, None
+        if self._x_bucket is not None:
+            n_top = len(self._x_bucket) - 1
+            lidx = np.rint(np.arccos(np.clip(self._x_bucket, -1.0, 1.0)) * n_top / np.pi)
+            lidx = lidx.astype(np.int64)
+            if len(np.unique(lidx)) == n_top + 1 and np.allclose(
+                np.cos(lidx * np.pi / n_top), self._x_bucket, rtol=0, atol=1e-12
+            ):
+                self._lidx, self._J = lidx, (n_top).bit_length() - 1
+
+        # transform selection
+        fct_available = basis == "chebyshev" and self._lidx is not None and self._m == 1
+        if transform == "fct" and not fct_available:
+            self._stop_spinner() if report else None
+            raise ValueError(
+                "transform='fct' requires basis='chebyshev', nodes=leja_dyadic_nodes with "
+                "leja_ordering=False, and spatial_dimension=1 (multi-dimensional sweep not yet implemented)."
+            )
+        self._transform = "fct" if (transform == "fct" or (transform == "auto" and fct_available)) else "lu"
 
         # grid
         self._spinner_label = "Constructing grid..."
@@ -434,6 +468,16 @@ class Function(AbstractFunction):
             "cs_V_2": self._cs_V_2 if hasattr(self, "_cs_V_2") else None,
         }
 
+    def _omega_tables(self) -> Tuple[np.ndarray, np.ndarray]:
+        if self._x_bucket is None:
+            raise ValueError(
+                "Omega requires an ordered node sequence covering the whole bucket, "
+                "e.g. nodes=leja_dyadic_nodes with leja_ordering=False."
+            )
+        if self._omega is None:
+            self._omega = get_omega(self._x_bucket, self._n + 1)
+        return self._omega
+
     def omega(self, N: int) -> Tuple[np.ndarray, np.ndarray]:
         """
         Nodal polynomial of the unseen nodes for the cropped size `N`.
@@ -457,16 +501,9 @@ class Function(AbstractFunction):
             If the tables are unavailable: `leja_ordering` was True, or the `nodes`
             callable returned fewer than `get_bucket(n + 1)` nodes.
         """
-        if self._x_bucket is None:
-            raise ValueError(
-                "Omega requires an ordered node sequence covering the whole bucket, "
-                "e.g. nodes=leja_dyadic_nodes with leja_ordering=False."
-            )
-        if self._omega is None:
-            self._omega = get_omega(self._x_bucket, self._n + 1)
+        omega, offsets = self._omega_tables()
         if not 1 <= N <= self._n + 1:
             raise ValueError(f"The cropped size N must satisfy 1 <= N <= {self._n + 1}.")
-        omega, offsets = self._omega
         return omega_seen(omega, offsets, N), omega_unseen(omega, offsets, N)
 
     def warmup(self) -> None:
@@ -514,6 +551,9 @@ class Function(AbstractFunction):
         >>> coeffs = fun.interp(values)
         """
         function_values = np.asarray(function_values).astype(np.float64)
+        if self._transform == "fct":
+            omega, offsets = self._omega_tables()
+            return crop_solve(function_values, self._lidx, self._J, omega, offsets, True)
         if hasattr(self, "_inv_Vx"):
             return transform_lt(
                 L=self._inv_Vx, x=function_values, **self._transform_args
@@ -567,6 +607,8 @@ class Function(AbstractFunction):
         >>> values_rec = fun.eval(coeffs)
         """
         coefficients = np.asarray(coefficients).astype(np.float64)
+        if self._transform == "fct":
+            return crop_eval(coefficients, self._lidx, self._J)
         function_values = np.zeros(len(self), dtype=np.float64)
         if hasattr(self, "_Vx"):
             function_values = transform_lt(
@@ -880,6 +922,7 @@ class Function(AbstractFunction):
             f"{'Spatial Dimension':<20} | {self._m}\n"
             f"{'Polynomial Degree':<20} | {self._n:_}\n"
             f"{'l^p Degree':<20} | {self._p}\n"
+            f"{'Transform':<20} | {self._transform}\n"
             f"{'Condition V':<20} | {self._condition_number:.2e}\n"
             f"{'Amount of Coeffs':<20} | {len(self):_}\n"
             f"{'Construction':<20} | {self._construction_ms:_.2f} ms\n"
