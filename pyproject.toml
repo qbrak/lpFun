@@ -12,6 +12,7 @@ python = ">=3.9,<4.0"
 numba = ">=0.60,<0.61"
 numpy = ">=1.26,<3.0"
 scipy = ">=1.13,<2.0"
+rocket-fft = ">=0.3,<0.4"
 
 
 [tool.poetry.group.dev.dependencies]
