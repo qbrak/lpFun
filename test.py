@@ -381,12 +381,10 @@ def test_function_transform_selection():
             1, 5, nodes=lpfun.basis.nodes.leja_dyadic_nodes, leja_ordering=False,
             transform="fct", precompilation=False, report=False,
         )
-    # three dimensions: not yet implemented -> auto falls back, explicit fct raises
+    # any dimension is available with dyadic nodes; unknown transform name raises
     kwargs = dict(basis="chebyshev", nodes=lpfun.basis.nodes.leja_dyadic_nodes, leja_ordering=False,
                   precompilation=False, report=False)
-    assert lpfun.Function(3, 5, **kwargs)._transform == "lu"
-    with pytest.raises(ValueError):
-        lpfun.Function(3, 5, transform="fct", **kwargs)
+    assert lpfun.Function(3, 5, **kwargs)._transform == "fct"
     with pytest.raises(ValueError):
         lpfun.Function(1, 5, transform="dct", **kwargs)
 
@@ -434,3 +432,49 @@ def test_function_fct_2d_counterexample():
     c = fun.interp(f)
     expected = np.array([1.0 if tuple(a) == (1, 0) else 0.0 for a in fun.index_set])
     assert np.allclose(c, expected, atol=1e-14)
+
+
+@pytest.mark.parametrize("m, n, p", [(2, 6, 2.0), (3, 4, 1.0), (3, 5, 2.0), (3, 3, np.inf), (4, 3, 2.0), (5, 3, 1.0)])
+def test_sweep_plan(m: int, n: int, p: float):
+    A = lpfun.core.set.lp_set(m, n, p)
+    plan = lpfun.core.sweep.Plan(A)
+    top = plan.node(0)
+    # top node: K = A, so its tubes are lpfun's tubes and nothing is unseen
+    T = lpfun.core.set.lp_tube(A, m, n, p)
+    assert np.array_equal(top["RK"], T) and np.array_equal(top["RA"], T)
+    assert np.array_equal(top["csK"], np.r_[0, np.cumsum(T)])
+    # every node: A inside K, tubes grouped by RA cover all tubes, children count = columns
+    for q in range(plan.n_nodes):
+        nd = plan.node(q)
+        if nd["dim"] == 1:
+            assert 0 < nd["LA"] <= nd["LK"]
+        else:
+            assert np.all(nd["RA"] <= nd["RK"]) and nd["RA"].max() == nd["nA"]
+            assert nd["fo"][-1] == nd["n_tubes"] and len(nd["child"]) == nd["nA"]
+            assert np.array_equal(np.sort(nd["finish"]), np.arange(nd["n_tubes"]))
+    if m == 2:  # the 2D kernel's bookkeeping is the one-node plan
+        assert np.array_equal(plan.LA[top["child"]], lpfun.core.sweep.column_lengths(T))
+
+
+@pytest.mark.parametrize("m, n, p", [(3, 3, 1.0), (3, 4, 2.0), (3, 3, np.inf), (4, 3, 2.0), (4, 4, 1.0), (5, 3, 2.0)])
+def test_function_fct_md(m: int, n: int, p: float):
+    kwargs = dict(
+        basis="chebyshev",
+        nodes=lpfun.basis.nodes.leja_dyadic_nodes,
+        leja_ordering=False,
+        precompilation=False,
+        report=False,
+    )
+    fct = lpfun.Function(m, n, p, transform="fct", **kwargs)
+    lu = lpfun.Function(m, n, p, transform="lu", **kwargs)
+    f = np.random.rand(len(fct))
+    c_fct, c_lu = fct.interp(f), lu.interp(f)
+    assert np.allclose(c_fct, c_lu, rtol=1e-9, atol=1e-11)
+    assert np.allclose(fct.eval(c_fct), f, rtol=1e-10, atol=1e-12)
+    # jitted kernels agree with the numpy reference recursion
+    plan, om, off = fct._sweep_plan(), *fct._omega_tables()
+    assert np.allclose(c_fct, lpfun.core.sweep.interp_md_py(f, plan, fct._lidx, fct._J, om, off), rtol=1e-12, atol=1e-14)
+    assert np.allclose(fct.eval(c_fct), lpfun.core.sweep.eval_md_py(c_fct, plan, fct._lidx, fct._J), rtol=1e-12, atol=1e-14)
+    if len(fct) <= 200:  # independent dense reference on the grid
+        c_ref = np.linalg.solve(_dense_vander_A(fct), f)
+        assert np.allclose(c_fct, c_ref, rtol=1e-9, atol=1e-11)

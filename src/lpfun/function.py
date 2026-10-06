@@ -29,6 +29,9 @@ from lpfun.core.crop import (
 from lpfun.core.sweep import (
     interp_2d,
     eval_2d,
+    Plan,
+    interp_md,
+    eval_md,
 )
 from lpfun.core.set import (
     lp_set,
@@ -201,8 +204,7 @@ class Function(AbstractFunction):
             Algorithm for `interp` and `eval`. "lu" uses the tube-wise triangular transforms
             of the (LU-factored) Vandermonde matrix for every basis. "fct" uses fast cosine
             transforms with cropped solves; it requires the Chebyshev basis, `leja_dyadic_nodes`
-            with `leja_ordering=False`, and is currently implemented for `spatial_dimension` 1 and 2.
-            "auto" picks "fct" where available and "lu" otherwise.
+            with `leja_ordering=False`. "auto" picks "fct" where available and "lu" otherwise.
             The default is "auto".
 
         Raises
@@ -309,12 +311,11 @@ class Function(AbstractFunction):
                 self._lidx, self._J = lidx, (n_top).bit_length() - 1
 
         # transform selection
-        fct_available = basis == "chebyshev" and self._lidx is not None and self._m <= 2
+        fct_available = basis == "chebyshev" and self._lidx is not None
         if transform == "fct" and not fct_available:
             self._stop_spinner() if report else None
             raise ValueError(
-                "transform='fct' requires basis='chebyshev', nodes=leja_dyadic_nodes with "
-                "leja_ordering=False, and spatial_dimension <= 2 (higher dimensions not yet implemented)."
+                "transform='fct' requires basis='chebyshev' and nodes=leja_dyadic_nodes with leja_ordering=False."
             )
         self._transform = "fct" if (transform == "fct" or (transform == "auto" and fct_available)) else "lu"
 
@@ -378,6 +379,12 @@ class Function(AbstractFunction):
         self._omega = None
         if precomputation and self._x_bucket is not None:
             self._omega = get_omega(self._x_bucket, self._n + 1)
+
+        # Recursion plan of the multi-dimensional FCT sweep (data independent)
+        self._spinner_label = "Constructing sweep plan..."
+        self._plan = None
+        if precomputation and self._transform == "fct" and self._m >= 3:
+            self._plan = Plan(self._A)
 
         construction_end = time.time()
         self._construction_ms = (construction_end - construction_start) * 1000
@@ -482,6 +489,11 @@ class Function(AbstractFunction):
             self._omega = get_omega(self._x_bucket, self._n + 1)
         return self._omega
 
+    def _sweep_plan(self) -> Plan:
+        if self._plan is None:
+            self._plan = Plan(self._A)
+        return self._plan
+
     def omega(self, N: int) -> Tuple[np.ndarray, np.ndarray]:
         """
         Nodal polynomial of the unseen nodes for the cropped size `N`.
@@ -559,7 +571,9 @@ class Function(AbstractFunction):
             omega, offsets = self._omega_tables()
             if self._m == 1:
                 return crop_solve(function_values, self._lidx, self._J, omega, offsets, True)
-            return interp_2d(function_values, self._T, self._cs_T, self._lidx, self._J, omega, offsets)
+            if self._m == 2:
+                return interp_2d(function_values, self._T, self._cs_T, self._lidx, self._J, omega, offsets)
+            return interp_md(function_values, self._sweep_plan(), self._lidx, self._J, omega, offsets)
         if hasattr(self, "_inv_Vx"):
             return transform_lt(
                 L=self._inv_Vx, x=function_values, **self._transform_args
@@ -616,7 +630,9 @@ class Function(AbstractFunction):
         if self._transform == "fct":
             if self._m == 1:
                 return crop_eval(coefficients, self._n + 1, self._lidx, self._J)
-            return eval_2d(coefficients, self._T, self._cs_T, self._lidx, self._J)
+            if self._m == 2:
+                return eval_2d(coefficients, self._T, self._cs_T, self._lidx, self._J)
+            return eval_md(coefficients, self._sweep_plan(), self._lidx, self._J)
         function_values = np.zeros(len(self), dtype=np.float64)
         if hasattr(self, "_Vx"):
             function_values = transform_lt(
